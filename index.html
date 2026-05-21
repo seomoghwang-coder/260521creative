@@ -12,15 +12,24 @@
     <!-- Firebase SDK 연동 -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, onSnapshot, addDoc, doc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        window.FirebaseApp = initializeApp(JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{"projectId":"dummy"}'));
+        // 선생님의 파이어베이스 고유 열쇠 (에러 없이 완벽하게 복구됨)
+        const firebaseConfig = {
+            apiKey: "AIzaSyC8rrMgZBZ-tulCvvBTZySkdKlfDhFz0bg",
+            authDomain: "creat-japangi.firebaseapp.com",
+            projectId: "creat-japangi",
+            storageBucket: "creat-japangi.firebasestorage.app",
+            messagingSenderId: "661085880877",
+            appId: "1:661085880877:web:823d66408162287608eea4"
+        };
+
+        window.FirebaseApp = initializeApp(firebaseConfig);
         window.FirebaseAuth = getAuth(window.FirebaseApp);
         window.FirebaseDB = getFirestore(window.FirebaseApp);
-        window.FirebaseAppId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        window.FirebaseInitialToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-        window.dbMethods = { collection, onSnapshot, addDoc, doc, deleteDoc, signInAnonymously, signInWithCustomToken, onAuthStateChanged };
+        window.FirebaseAppId = "creat-japangi";
+        window.dbMethods = { collection, onSnapshot, addDoc, doc, deleteDoc, signInAnonymously, onAuthStateChanged };
     </script>
 
     <style>
@@ -83,11 +92,7 @@
                         
                         const initAuth = async () => {
                             try {
-                                if (window.FirebaseInitialToken) {
-                                    await window.dbMethods.signInWithCustomToken(window.FirebaseAuth, window.FirebaseInitialToken);
-                                } else {
-                                    await window.dbMethods.signInAnonymously(window.FirebaseAuth);
-                                }
+                                await window.dbMethods.signInAnonymously(window.FirebaseAuth);
                             } catch (error) {
                                 console.error("인증 실패:", error);
                             }
