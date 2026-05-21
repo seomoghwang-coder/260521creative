@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>아무말 대잔치 발명 자판기 (교실 공유형)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Firebase SDK 연동 -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot, addDoc, doc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        window.FirebaseApp = initializeApp(JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{"projectId":"dummy"}'));
+        window.FirebaseAuth = getAuth(window.FirebaseApp);
+        window.FirebaseDB = getFirestore(window.FirebaseApp);
+        window.FirebaseAppId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        window.FirebaseInitialToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        window.dbMethods = { collection, onSnapshot, addDoc, doc, deleteDoc, signInAnonymously, signInWithCustomToken, onAuthStateChanged };
+    </script>
+
+    <style>
+        body { font-family: 'Pretendard', sans-serif; background-color: #fdf4ff; }
+        .slot-machine-bg { background: linear-gradient(145deg, #f3e8ff, #fbcfe8); }
+        .spin-animation { animation: spinBlur 0.08s infinite; }
+        @keyframes spinBlur {
+            0% { transform: translateY(-5px); opacity: 0.8; filter: blur(1px); }
+            50% { transform: translateY(5px); opacity: 0.8; filter: blur(1px); }
+            100% { transform: translateY(-5px); opacity: 0.8; filter: blur(1px); }
+        }
+        .pop-in { animation: popIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+        @keyframes popIn {
+            from { transform: scale(0.5); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+        .progress-transition { transition: width 0.3s ease-in-out; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const itemDatabase = [
+            { word: "사과", emoji: "🍎" }, { word: "우산", emoji: "☂️" }, { word: "의자", emoji: "🪑" },
+            { word: "컵", emoji: "☕" }, { word: "가위", emoji: "✂️" }, { word: "연필", emoji: "✏️" },
+            { word: "신발", emoji: "👟" }, { word: "거울", emoji: "🪞" }, { word: "안경", emoji: "👓" },
+            { word: "모자", emoji: "🧢" }, { word: "공", emoji: "⚽" }, { word: "풍선", emoji: "🎈" },
+            { word: "숟가락", emoji: "🥄" }, { word: "가방", emoji: "🎒" }, { word: "시계", emoji: "⏰" },
+            { word: "양말", emoji: "🧦" }, { word: "자물쇠", emoji: "🔒" }, { word: "바퀴", emoji: "🛞" },
+            { word: "휴지", emoji: "🧻" }, { word: "장갑", emoji: "🧤" }, { word: "봉투", emoji: "✉️" },
+            { word: "냄비", emoji: "🍲" }, { word: "칫솔", emoji: "🪥" }, { word: "자석", emoji: "🧲" }
+        ];
+
+        const getRandomItem = () => itemDatabase[Math.floor(Math.random() * itemDatabase.length)];
+
+        function App() {
+            const [user, setUser] = useState(null);
+            const [isFirebaseLoaded, setIsFirebaseLoaded] = useState(false);
+            const [teamName, setTeamName] = useState('');
+            const [isJoined, setIsJoined] = useState(false);
+            const [baseItem, setBaseItem] = useState(null);
+            const [newItem, setNewItem] = useState(null);
+            const [isSpinning, setIsSpinning] = useState(false);
+            const [isBaseSpinning, setIsBaseSpinning] = useState(false);
+            const [inventionName, setInventionName] = useState('');
+            const [inventionDesc, setInventionDesc] = useState('');
+            const [inventory, setInventory] = useState([]);
+            const [round, setRound] = useState(1);
+            const [baseUsageCount, setBaseUsageCount] = useState(0);
+            const MAX_BASE_USAGE = 3;
+
+            useEffect(() => {
+                const checkFirebase = setInterval(() => {
+                    if (window.FirebaseAuth && window.dbMethods) {
+                        clearInterval(checkFirebase);
+                        setIsFirebaseLoaded(true);
+                        
+                        const initAuth = async () => {
+                            try {
+                                if (window.FirebaseInitialToken) {
+                                    await window.dbMethods.signInWithCustomToken(window.FirebaseAuth, window.FirebaseInitialToken);
+                                } else {
+                                    await window.dbMethods.signInAnonymously(window.FirebaseAuth);
+                                }
+                            } catch (error) {
+                                console.error("인증 실패:", error);
+                            }
+                        };
+                        initAuth();
+                        
+                        window.dbMethods.onAuthStateChanged(window.FirebaseAuth, (currentUser) => {
+                            setUser(currentUser);
+                        });
+                    }
+                }, 100);
+                return () => clearInterval(checkFirebase);
+            }, []);
+
+            useEffect(() => {
+                if (!user) return;
+                
+                const colRef = window.dbMethods.collection(window.FirebaseDB, 'artifacts', window.FirebaseAppId, 'public', 'data', 'inventions');
+                
+                const unsubscribe = window.dbMethods.onSnapshot(colRef, (snapshot) => {
+                    const items = snapshot.docs.map(doc => ({
+                        docId: doc.id,
+                        ...doc.data()
+                    }));
+                    
+                    items.sort((a, b) => b.timestamp - a.timestamp);
+                    setInventory(items);
+                    
+                    if (items.length > 0 && inventory.length > 0 && items.length > inventory.length) {
+                        playSuccessSound();
+                    }
+                }, (error) => {
+                    console.error("실시간 데이터 불러오기 오류:", error);
+                });
+
+                return () => unsubscribe();
+            }, [user]);
+
+            useEffect(() => {
+                if (isJoined) spinItems(true, null, null);
+            }, [isJoined]);
+
+            const playSuccessSound = () => {
+                if ('speechSynthesis' in window) {
+                    window.speechSynthesis.cancel();
+                    const utterance = new SpeechSynthesisUtterance('대단하십니다!');
+                    utterance.lang = 'ko-KR';
+                    utterance.pitch = 1.3;
+                    utterance.rate = 1.1;
+                    window.speechSynthesis.speak(utterance);
+                }
+            };
+
+            const spinItems = (shouldChangeBase, currentBase, currentNew) => {
+                setIsSpinning(true);
+                if (shouldChangeBase) setIsBaseSpinning(true);
+
+                let targetBase = currentBase;
+                if (shouldChangeBase || !currentBase) {
+                    targetBase = getRandomItem();
+                    while(currentBase && targetBase.word === currentBase.word) targetBase = getRandomItem();
+                }
+
+                let targetRandom = getRandomItem();
+                while(targetRandom.word === targetBase.word || (currentNew && targetRandom.word === currentNew.word)) {
+                    targetRandom = getRandomItem();
+                }
+
+                let spinCount = 0;
+                const spinInterval = setInterval(() => {
+                    if (shouldChangeBase) setBaseItem(getRandomItem());
+                    setNewItem(getRandomItem());
+                    spinCount++;
+                    
+                    if (spinCount > 10) {
+                        clearInterval(spinInterval);
+                        setBaseItem(targetBase);
+                        setNewItem(targetRandom);
+                        setIsSpinning(false);
+                        setIsBaseSpinning(false);
+                    }
+                }, 80);
+            };
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                if (!inventionName.trim() || !inventionDesc.trim() || !user) return;
+
+                playSuccessSound();
+
+                try {
+                    const colRef = window.dbMethods.collection(window.FirebaseDB, 'artifacts', window.FirebaseAppId, 'public', 'data', 'inventions');
+                    await window.dbMethods.addDoc(colRef, {
+                        teamName: teamName,
+                        item1: baseItem,
+                        item2: newItem,
+                        name: inventionName,
+                        desc: inventionDesc,
+                        timestamp: Date.now(),
+                        userId: user.uid
+                    });
+                } catch (error) {
+                    console.error("저장 중 오류 발생:", error);
+                }
+                
+                const nextUsageCount = baseUsageCount + 1;
+                if (nextUsageCount >= MAX_BASE_USAGE) {
+                    setBaseUsageCount(0);
+                    spinItems(true, baseItem, newItem); 
+                } else {
+                    setBaseUsageCount(nextUsageCount);
+                    spinItems(false, baseItem, newItem); 
+                }
+
+                setInventionName('');
+                setInventionDesc('');
+                setRound(round + 1);
+            };
+
+            const handleUndo = async () => {
+                if (inventory.length === 0 || isSpinning || isBaseSpinning || !user) return;
+
+                const myLastInvention = inventory.find(inv => inv.userId === user.uid);
+                
+                if (myLastInvention) {
+                    try {
+                        const docRef = window.dbMethods.doc(window.FirebaseDB, 'artifacts', window.FirebaseAppId, 'public', 'data', 'inventions', myLastInvention.docId);
+                        await window.dbMethods.deleteDoc(docRef);
+                        
+                        setBaseItem(myLastInvention.item1);
+                        setNewItem(myLastInvention.item2);
+                        setInventionName(myLastInvention.name);
+                        setInventionDesc(myLastInvention.desc);
+                    } catch (error) {
+                        console.error("삭제 실패:", error);
+                    }
+                }
+            };
+
+            if (!isJoined) {
+                return (
+                    <div className="min-h-screen bg-purple-50 flex flex-col items-center justify-center p-4">
+                        <div className="bg-white p-10 rounded-3xl shadow-2xl max-w-md w-full text-center border-4 border-purple-200">
+                            <h1 className="text-4xl font-black text-purple-600 mb-6 drop-shadow-sm">🎰 발명 자판기</h1>
+                            <p className="text-gray-600 mb-8 font-medium">우리 조의 이름을 입력하고 교실 공유방에 입장하세요!</p>
+                            <input 
+                                type="text" 
+                                value={teamName}
+                                onChange={(e) => setTeamName(e.target.value)}
+                                placeholder="예: 1조, 번뜩이는 3조" 
+                                className="w-full p-4 text-xl font-bold text-center border-2 border-purple-100 rounded-xl mb-6 focus:border-purple-500 focus:outline-none"
+                                onKeyPress={(e) => e.key === 'Enter' && teamName.trim() && setIsJoined(true)}
+                            />
+                            <button 
+                                onClick={() => teamName.trim() && setIsJoined(true)}
+                                disabled={!teamName.trim() || !isFirebaseLoaded || !user}
+                                className={`w-full py-4 rounded-xl font-bold text-white text-xl transition-all shadow-lg ${
+                                    (!teamName.trim() || !isFirebaseLoaded || !user) ? 'bg-gray-400' : 'bg-purple-600 hover:bg-purple-700 hover:-translate-y-1'
+                                }`}
+                            >
+                                {(!isFirebaseLoaded || !user) ? '교실 서버 연결 중...' : '자판기 켜기 🚀'}
+                            </button>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen p-4 md:p-8 flex flex-col items-center">
+                    <div className="w-full max-w-7xl flex flex-col md:flex-row justify-between items-end mb-6">
+                        <div className="text-left">
+                            <h1 className="text-3xl md:text-5xl font-black text-purple-600 mb-2 drop-shadow-sm">
+                                🎰 아무말 대잔치 발명 자판기
+                            </h1>
+                            <p className="text-gray-600 text-lg font-bold">접속 중인 조: <span className="text-purple-600">[{teamName}]</span></p>
+                        </div>
+                    </div>
+
+                    <div className="w-full max-w-7xl grid grid-cols-1 lg:grid-cols-12 gap-8">
+                        <div className="lg:col-span-5 slot-machine-bg rounded-[2rem] p-6 shadow-2xl border-4 border-purple-200 h-fit">
+                            <div className="bg-white rounded-2xl p-6 shadow-inner text-center">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h2 className="text-xl font-bold text-gray-700">{teamName}의 활동</h2>
+                                    <span className="text-sm font-bold bg-purple-100 text-purple-700 px-3 py-1 rounded-full border border-purple-200">
+                                        테마 유지: {baseUsageCount}/3
+                                    </span>
+                                </div>
+                                
+                                <div className="w-full bg-gray-200 rounded-full h-2.5 mb-6 overflow-hidden">
+                                    <div className="bg-purple-600 h-2.5 rounded-full progress-transition" style={{ width: `${(baseUsageCount / MAX_BASE_USAGE) * 100}%` }}></div>
+                                </div>
+                                
+                                {baseItem && newItem ? (
+                                    <div className="flex justify-center items-center gap-2 md:gap-4 mb-6">
+                                        <div className={`flex flex-col items-center p-4 bg-gray-50 rounded-2xl w-32 border-2 border-gray-200 relative ${isBaseSpinning ? 'spin-animation' : 'pop-in'}`}>
+                                            <span className="absolute -top-3 bg-gray-600 text-white text-xs font-bold px-2 py-1 rounded shadow">고정 테마</span>
+                                            <span className="text-5xl mt-2 mb-2">{baseItem.emoji}</span>
+                                            <span className="font-bold text-xl">{baseItem.word}</span>
+                                        </div>
+                                        <div className="text-3xl font-black text-purple-400">+</div>
+                                        <div className={`flex flex-col items-center p-4 bg-yellow-50 rounded-2xl w-32 border-2 border-yellow-300 relative ${isSpinning ? 'spin-animation' : 'pop-in'}`}>
+                                            <span className="absolute -top-3 bg-yellow-500 text-white text-xs font-bold px-2 py-1 rounded shadow">새 랜덤재료</span>
+                                            <span className="text-5xl mt-2 mb-2">{newItem.emoji}</span>
+                                            <span className="font-bold text-xl">{newItem.word}</span>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="h-32 flex items-center justify-center text-gray-400 font-bold">자판기 로딩 중...</div>
+                                )}
+
+                                <form onSubmit={handleSubmit} className="space-y-3 text-left">
+                                    <div>
+                                        <input 
+                                            type="text" 
+                                            value={inventionName}
+                                            onChange={(e) => setInventionName(e.target.value)}
+                                            placeholder="🎁 발명품 이름 (예: 사과워치)" 
+                                            className="w-full p-4 text-lg font-bold border-2 border-purple-100 rounded-xl focus:border-purple-400 focus:outline-none"
+                                            required
+                                            disabled={isSpinning || isBaseSpinning}
+                                        />
+                                    </div>
+                                    <div>
+                                        <textarea 
+                                            value={inventionDesc}
+                                            onChange={(e) => setInventionDesc(e.target.value)}
+                                            placeholder="✨ 어떤 기능이 있나요?" 
+                                            className="w-full p-4 h-24 resize-none text-lg border-2 border-purple-100 rounded-xl focus:border-purple-400 focus:outline-none"
+                                            required
+                                            disabled={isSpinning || isBaseSpinning}
+                                        />
+                                    </div>
+                                    
+                                    <div className="flex flex-col gap-2 pt-2">
+                                        <button 
+                                            type="submit" 
+                                            disabled={isSpinning || isBaseSpinning}
+                                            className={`w-full py-4 rounded-xl font-bold text-white text-lg transition-all ${
+                                                (isSpinning || isBaseSpinning) ? 'bg-gray-400' : 'bg-purple-600 hover:bg-purple-700 hover:-translate-y-1 shadow-lg'
+                                            }`}
+                                        >
+                                            {(isSpinning || isBaseSpinning) ? '재료 뽑는 중...' : '클라우드 도감에 등록하기 🚀'}
+                                        </button>
+                                        
+                                        <button 
+                                            type="button" 
+                                            onClick={handleUndo}
+                                            disabled={inventory.filter(i => i.userId === user.uid).length === 0 || isSpinning || isBaseSpinning}
+                                            className={`w-full py-3 rounded-xl font-bold text-sm transition-all ${
+                                                (inventory.filter(i => i.userId === user.uid).length === 0 || isSpinning || isBaseSpinning)
+                                                ? 'bg-gray-100 text-gray-400 cursor-not-allowed border-2 border-transparent'
+                                                : 'bg-white text-gray-500 border-2 border-gray-300 hover:bg-red-50 hover:text-red-500 hover:border-red-300'
+                                            }`}
+                                        >
+                                            ⏪ 우리 조가 등록한 마지막 발명품 취소
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+
+                        <div className="lg:col-span-7 bg-white rounded-[2rem] p-6 shadow-xl border-4 border-indigo-100 h-[750px] flex flex-col relative overflow-hidden">
+                            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-400 via-purple-500 to-pink-500"></div>
+                            
+                            <h3 className="text-2xl font-bold text-indigo-900 mb-6 flex items-center gap-3">
+                                📡 실시간 우리 반 발명품 도감
+                                <span className="text-sm font-black bg-indigo-500 text-white px-3 py-1 rounded-full animate-pulse">
+                                    LIVE ({inventory.length})
+                                </span>
+                            </h3>
+
+                            {inventory.length === 0 ? (
+                                <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
+                                    <div className="text-6xl mb-4">👀</div>
+                                    <p className="text-xl font-bold">아직 등록된 발명품이 없습니다.</p>
+                                    <p>첫 번째 발명품을 등록하는 조는 누구일까요?</p>
+                                </div>
+                            ) : (
+                                <div className="flex-1 overflow-y-auto pr-2 space-y-4">
+                                    {inventory.map((inv) => (
+                                        <div key={inv.docId} 
+                                            className={`p-4 rounded-2xl border-l-8 shadow-sm transition-all relative ${
+                                                inv.userId === user.uid ? 'bg-purple-50 border-purple-500' : 'bg-gray-50 border-gray-400'
+                                            }`}
+                                        >
+                                            <div className="absolute -top-3 -left-2 bg-indigo-600 text-white text-sm font-black px-3 py-1 rounded-full shadow-md z-10 border-2 border-white">
+                                                {inv.teamName}
+                                            </div>
+                                            
+                                            {inv.userId === user.uid && (
+                                                <div className="absolute top-2 right-2 text-xs font-bold text-purple-400">내 아이디어</div>
+                                            )}
+
+                                            <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-3 mt-2 gap-2">
+                                                <h4 className="font-black text-2xl text-gray-800">{inv.name}</h4>
+                                                <span className="text-base bg-white px-3 py-1.5 rounded-lg shadow-sm font-bold text-gray-600 border border-gray-200 whitespace-nowrap">
+                                                    {inv.item1.emoji} {inv.item1.word} <span className="text-pink-500">+</span> {inv.item2.emoji} {inv.item2.word}
+                                                </span>
+                                            </div>
+                                            <p className="text-gray-700 font-medium text-lg leading-relaxed p-4 bg-white rounded-xl shadow-inner border border-gray-100">
+                                                "{inv.desc}"
+                                            </p>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
